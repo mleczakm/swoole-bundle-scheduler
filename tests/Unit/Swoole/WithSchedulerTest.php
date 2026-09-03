@@ -393,7 +393,7 @@ final class WithSchedulerTest extends TestCase
      */
     private static function lockRegistryFiles(): array
     {
-        $property = new ReflectionClass(LockRegistry::class)->getProperty('files');
+        $property = (new ReflectionClass(LockRegistry::class))->getProperty('files');
 
         /** @var list<string> $files */
         $files = $property->getValue();
