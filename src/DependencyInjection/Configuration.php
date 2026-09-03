@@ -79,7 +79,7 @@ final class Configuration implements ConfigurationInterface
                     ->children()
                         ->booleanNode('enabled')->defaultFalse()->end()
                         ->scalarNode('cache')
-                            ->info('PSR-16 cache service id. Must be a cross-process, deploy-surviving store (Redis / DBAL), not an in-memory pool.')
+                            ->info('Cache pool service id (PSR-6). Must be a cross-process, deploy-surviving store (Redis / DBAL), not an in-memory pool.')
                             ->defaultValue('cache.app')
                             ->cannotBeEmpty()
                         ->end()

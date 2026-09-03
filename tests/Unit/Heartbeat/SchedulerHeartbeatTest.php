@@ -6,12 +6,11 @@ namespace SwooleBundle\Scheduler\Tests\Unit\Heartbeat;
 
 use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\TestCase;
+use Psr\Cache\CacheItemPoolInterface;
 use Psr\Log\LoggerInterface;
-use Psr\SimpleCache\CacheInterface;
 use RuntimeException;
 use SwooleBundle\Scheduler\Heartbeat\SchedulerHeartbeat;
 use Symfony\Component\Cache\Adapter\ArrayAdapter;
-use Symfony\Component\Cache\Psr16Cache;
 use Symfony\Component\Clock\MockClock;
 
 #[Group('unit')]
@@ -20,7 +19,7 @@ final class SchedulerHeartbeatTest extends TestCase
     public function testReturnsNullWhenNoTickHasBeenRecorded(): void
     {
         $heartbeat = new SchedulerHeartbeat(
-            new Psr16Cache(new ArrayAdapter()),
+            new ArrayAdapter(),
             new MockClock(),
             self::createStub(LoggerInterface::class),
         );
@@ -32,7 +31,7 @@ final class SchedulerHeartbeatTest extends TestCase
     {
         $clock = new MockClock('2026-09-01 12:00:00');
         $heartbeat = new SchedulerHeartbeat(
-            new Psr16Cache(new ArrayAdapter()),
+            new ArrayAdapter(),
             $clock,
             self::createStub(LoggerInterface::class),
         );
@@ -46,8 +45,8 @@ final class SchedulerHeartbeatTest extends TestCase
 
     public function testBeatSwallowsAndLogsCacheFailures(): void
     {
-        $cache = self::createStub(CacheInterface::class);
-        $cache->method('set')->willThrowException(new RuntimeException('cache down'));
+        $cache = self::createStub(CacheItemPoolInterface::class);
+        $cache->method('getItem')->willThrowException(new RuntimeException('cache down'));
         $logger = $this->createMock(LoggerInterface::class);
         $logger
             ->expects(self::once())
@@ -61,8 +60,8 @@ final class SchedulerHeartbeatTest extends TestCase
 
     public function testSecondsSinceLastBeatReturnsNullWhenTheCacheReadFails(): void
     {
-        $cache = self::createStub(CacheInterface::class);
-        $cache->method('get')->willThrowException(new RuntimeException('cache down'));
+        $cache = self::createStub(CacheItemPoolInterface::class);
+        $cache->method('getItem')->willThrowException(new RuntimeException('cache down'));
         $logger = $this->createMock(LoggerInterface::class);
         $logger
             ->expects(self::once())
@@ -77,11 +76,11 @@ final class SchedulerHeartbeatTest extends TestCase
     public function testHonoursACustomCacheKey(): void
     {
         $clock = new MockClock('2026-09-01 12:00:00');
-        $cache = new Psr16Cache(new ArrayAdapter());
+        $pool = new ArrayAdapter();
 
-        $heartbeat = new SchedulerHeartbeat($cache, $clock, null, 'custom_key');
+        $heartbeat = new SchedulerHeartbeat($pool, $clock, null, 'custom_key');
         $heartbeat->beat();
 
-        self::assertSame($clock->now()->getTimestamp(), $cache->get('custom_key'));
+        self::assertSame($clock->now()->getTimestamp(), $pool->getItem('custom_key')->get());
     }
 }

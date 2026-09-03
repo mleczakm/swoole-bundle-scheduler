@@ -84,7 +84,7 @@ swoole_bundle_scheduler:
         timeout: 15          # seconds; deadline for one Scheduler::run() pass
     heartbeat:
         enabled: false
-        cache: cache.app     # PSR-16, cross-process, deploy-surviving
+        cache: cache.app     # PSR-6 pool, cross-process, deploy-surviving
         key: scheduler_last_tick_at
         ttl: 86400
     health_check:

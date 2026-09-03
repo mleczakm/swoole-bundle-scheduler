@@ -23,7 +23,6 @@ use SwooleBundle\SwooleBundle\Bridge\Symfony\Container\ServicePool\ServicePoolCo
 use SwooleBundle\SwooleBundle\Bridge\Symfony\Container\ServicePool\ServicePoolEntry;
 use Symfony\Component\Cache\Adapter\ArrayAdapter;
 use Symfony\Component\Cache\LockRegistry;
-use Symfony\Component\Cache\Psr16Cache;
 use Symfony\Component\Clock\MockClock;
 use Symfony\Component\Lock\LockFactory;
 use Symfony\Component\Lock\Store\InMemoryStore;
@@ -130,7 +129,7 @@ final class WithSchedulerTest extends TestCase
     public function testTickWritesTheHeartbeatAfterASuccessfulRun(): void
     {
         $clock = new MockClock('2026-09-01 12:00:00');
-        $heartbeat = new SchedulerHeartbeat(new Psr16Cache(new ArrayAdapter()), $clock, new NullLogger());
+        $heartbeat = new SchedulerHeartbeat(new ArrayAdapter(), $clock, new NullLogger());
 
         $withScheduler = new WithScheduler(
             self::createStub(Scheduler::class),
@@ -148,7 +147,7 @@ final class WithSchedulerTest extends TestCase
     public function testTickDoesNotWriteTheHeartbeatWhenTheRunFails(): void
     {
         $clock = new MockClock('2026-09-01 12:00:00');
-        $heartbeat = new SchedulerHeartbeat(new Psr16Cache(new ArrayAdapter()), $clock, new NullLogger());
+        $heartbeat = new SchedulerHeartbeat(new ArrayAdapter(), $clock, new NullLogger());
 
         $scheduler = self::createStub(Scheduler::class);
         $scheduler->method('run')->willThrowException(new RuntimeException('boom'));

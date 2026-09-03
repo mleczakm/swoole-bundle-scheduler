@@ -11,7 +11,6 @@ use Psr\Log\NullLogger;
 use SwooleBundle\Scheduler\HealthCheck\SchedulerHeartbeatHealthCheck;
 use SwooleBundle\Scheduler\Heartbeat\SchedulerHeartbeat;
 use Symfony\Component\Cache\Adapter\ArrayAdapter;
-use Symfony\Component\Cache\Psr16Cache;
 use Symfony\Component\Clock\MockClock;
 
 #[Group('unit')]
@@ -26,7 +25,7 @@ final class SchedulerHeartbeatHealthCheckTest extends TestCase
     {
         $this->clock = new MockClock('2026-09-01 12:00:00');
         $this->heartbeat = new SchedulerHeartbeat(
-            new Psr16Cache(new ArrayAdapter()),
+            new ArrayAdapter(),
             $this->clock,
             new NullLogger(),
         );

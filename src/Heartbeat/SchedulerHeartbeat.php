@@ -4,9 +4,9 @@ declare(strict_types=1);
 
 namespace SwooleBundle\Scheduler\Heartbeat;
 
+use Psr\Cache\CacheItemPoolInterface;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
-use Psr\SimpleCache\CacheInterface;
 use Symfony\Component\Clock\Clock;
 use Symfony\Component\Clock\ClockInterface;
 use Throwable;
@@ -16,9 +16,8 @@ use Throwable;
  *
  * Written by {@see \SwooleBundle\Scheduler\Swoole\WithScheduler} after every successful
  * `Scheduler::run()`, read by {@see \SwooleBundle\Scheduler\HealthCheck\SchedulerHeartbeatHealthCheck}
- * from an HTTP worker. Back it with a cross-process, deploy-surviving PSR-16 store (a Redis or
- * DBAL-backed cache pool), not an in-memory one - the writer and the reader are different
- * processes.
+ * from an HTTP worker. Back it with a cross-process, deploy-surviving cache pool (a Redis or
+ * DBAL-backed pool), not an in-memory one - the writer and the reader are different processes.
  *
  * A `Timer::tick` coroutine can wedge inside `Scheduler::run()` while every `/health` probe
  * still passes and nothing restarts the container. A stale heartbeat is the direct signal for
@@ -29,7 +28,7 @@ final readonly class SchedulerHeartbeat
     private LoggerInterface $logger;
 
     public function __construct(
-        private CacheInterface $cache,
+        private CacheItemPoolInterface $cache,
         private ClockInterface $clock = new Clock(),
         ?LoggerInterface $logger = null,
         private string $cacheKey = 'scheduler_last_tick_at',
@@ -47,7 +46,10 @@ final readonly class SchedulerHeartbeat
     public function beat(): void
     {
         try {
-            $this->cache->set($this->cacheKey, $this->clock->now()->getTimestamp(), $this->ttlSeconds);
+            $item = $this->cache->getItem($this->cacheKey);
+            $item->set($this->clock->now()->getTimestamp());
+            $item->expiresAfter($this->ttlSeconds);
+            $this->cache->save($item);
         } catch (Throwable $e) {
             $this->logger->warning('Failed to write scheduler heartbeat', ['exception' => $e]);
         }
@@ -61,12 +63,18 @@ final readonly class SchedulerHeartbeat
     public function secondsSinceLastBeat(): ?int
     {
         try {
-            $lastTickAt = $this->cache->get($this->cacheKey);
+            $item = $this->cache->getItem($this->cacheKey);
         } catch (Throwable $e) {
             $this->logger->warning('Failed to read scheduler heartbeat', ['exception' => $e]);
 
             return null;
         }
+
+        if (! $item->isHit()) {
+            return null;
+        }
+
+        $lastTickAt = $item->get();
 
         if (! is_int($lastTickAt)) {
             return null;

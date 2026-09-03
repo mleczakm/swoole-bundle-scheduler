@@ -32,7 +32,7 @@ swoole_bundle_scheduler:
     # Record a "last completed tick" timestamp after every successful run.
     heartbeat:
         enabled: false
-        cache: cache.app               # PSR-16, cross-process, deploy-surviving (Redis / DBAL)
+        cache: cache.app               # PSR-6 pool, cross-process, deploy-surviving (Redis / DBAL)
         key: scheduler_last_tick_at
         ttl: 86400
 

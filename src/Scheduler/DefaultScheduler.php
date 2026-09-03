@@ -46,12 +46,13 @@ final class DefaultScheduler implements Scheduler
     private readonly ?Closure $beforeRun;
 
     /**
-     * @param list<ScheduleProviderInterface> $scheduleProviders
+     * @param iterable<ScheduleProviderInterface> $scheduleProviders a tagged iterator of
+     *        `scheduler.schedule_provider` services, or a plain array
      * @param (callable(): void)|null $beforeRun
      */
     public function __construct(
         private readonly MessageBusInterface $bus,
-        array $scheduleProviders,
+        iterable $scheduleProviders,
         private readonly ClockInterface $clock = new Clock(),
         private readonly ?EventDispatcherInterface $dispatcher = null,
         ?callable $beforeRun = null,
