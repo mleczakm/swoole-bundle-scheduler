@@ -1,0 +1,8 @@
+parameters:
+    level: 8
+    paths:
+        - src
+    treatPhpDocTypesAsCertain: false
+    excludePaths:
+        # Config\Definition\Builder fluent API is untyped ArrayNodeDefinition/NodeParentInterface
+        - src/DependencyInjection/Configuration.php

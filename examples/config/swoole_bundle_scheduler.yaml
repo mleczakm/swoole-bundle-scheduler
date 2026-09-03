@@ -1,0 +1,42 @@
+# config/packages/swoole_bundle_scheduler.yaml
+#
+# Every block below the first two is opt-in. A plain app only needs `enabled` + `interval`.
+swoole_bundle_scheduler:
+    # Register the Swoole Timer::tick polling loop as a server configurator.
+    enabled: true
+
+    # Seconds between polls. 60 is the default; drop to 1 only if you have sub-minute schedules.
+    interval: 60
+
+    # Optional. Service id invoked as a callable before each poll pass and before each message
+    # dispatch - e.g. a database-connection liveness check. Must be invokable (__invoke).
+    # pre_run: 'App\Scheduler\ConnectionGuard'
+
+    # Optional. Service id invoked as a callable after every tick, success or not - for
+    # resetting shared, non-pooled app state. Must be invokable.
+    # after_tick: 'App\Scheduler\SharedStateReset'
+
+    # Cross-process lock around each tick. Enable only if you have observed the same tick
+    # double-dispatching from a second OS process (Swoole's manager process during a reload).
+    lock:
+        enabled: false
+        factory: lock.factory          # a Symfony LockFactory backed by a cross-process store
+        resource: swoole-scheduler-tick
+
+    # Timer::after deadline for one Scheduler::run() pass. A hung run never frees a semaphore;
+    # past the deadline the tick is abandoned and the lock force-released so scheduling resumes.
+    watchdog:
+        enabled: false
+        timeout: 15
+
+    # Record a "last completed tick" timestamp after every successful run.
+    heartbeat:
+        enabled: false
+        cache: cache.app               # PSR-16, cross-process, deploy-surviving (Redis / DBAL)
+        key: scheduler_last_tick_at
+        ttl: 86400
+
+    # /health check (requires macpaw/symfony-health-check-bundle). Implies `heartbeat`.
+    health_check:
+        enabled: false
+        max_silence: 90                # seconds without a completed tick before the check fails
