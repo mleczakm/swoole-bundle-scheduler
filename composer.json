@@ -17,7 +17,7 @@
         "psr/clock": "^1.0",
         "psr/event-dispatcher": "^1.0",
         "psr/log": "^3.0",
-        "swoole-bundle/swoole-bundle": "^0.32",
+        "swoole-bundle/swoole-bundle": "^0.32 || ^0.33 || ^0.34",
         "symfony/cache": "^7.4 || ^8.0",
         "symfony/clock": "^7.4 || ^8.0",
         "symfony/config": "^7.4 || ^8.0",
