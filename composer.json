@@ -17,14 +17,14 @@
         "psr/clock": "^1.0",
         "psr/event-dispatcher": "^1.0",
         "psr/log": "^3.0",
-        "swoole-bundle/swoole-bundle": "^0.32 || ^0.33 || ^0.34",
-        "symfony/cache": "^7.4 || ^8.0",
-        "symfony/clock": "^7.4 || ^8.0",
-        "symfony/config": "^7.4 || ^8.0",
-        "symfony/dependency-injection": "^7.4 || ^8.0",
-        "symfony/http-kernel": "^7.4 || ^8.0",
-        "symfony/messenger": "^7.4 || ^8.0",
-        "symfony/scheduler": "^7.4 || ^8.0"
+        "swoole-bundle/swoole-bundle": ">0.33 <1.0",
+        "symfony/cache": ">=7.4 <9.0",
+        "symfony/clock": ">=7.4 <9.0",
+        "symfony/config": ">=7.4 <9.0",
+        "symfony/dependency-injection": ">=7.4 <9.0",
+        "symfony/http-kernel": ">=7.4 <9.0",
+        "symfony/messenger": ">=7.4 <9.0",
+        "symfony/scheduler": ">=7.4 <9.0"
     },
     "require-dev": {
         "friendsofphp/php-cs-fixer": "^3.94",
@@ -33,8 +33,8 @@
         "phpstan/phpstan": "^2.1",
         "phpstan/phpstan-phpunit": "^2.0",
         "phpunit/phpunit": "^11.5 || ^12.5",
-        "symfony/framework-bundle": "^7.4 || ^8.0",
-        "symfony/lock": "^7.4 || ^8.0"
+        "symfony/framework-bundle": ">=7.4 <9.0",
+        "symfony/lock": ">=7.4 <9.0"
     },
     "suggest": {
         "symfony/lock": "Enables the opt-in cross-process tick lock (swoole_bundle_scheduler.lock)",

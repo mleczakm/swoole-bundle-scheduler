@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+
+- Support `swoole-bundle/swoole-bundle` versions greater than 0.33 and below 1.0; express
+  Symfony 7.4 through 8.x compatibility as one continuous version range.
+
 ### Added
 
 - Initial release. Extracted from an app-local implementation into a reusable bundle.

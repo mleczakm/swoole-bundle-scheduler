@@ -57,7 +57,7 @@ All disabled by default; enable per app when you hit the failure mode:
 ## Requirements
 
 - PHP >= 8.3, `ext-swoole`
-- `swoole-bundle/swoole-bundle` `^0.32` with coroutines enabled
+- `swoole-bundle/swoole-bundle` `>0.33 <1.0` with coroutines enabled
 - `symfony/scheduler` + `symfony/messenger`
 - `symfony/lock` (only for the `lock` option)
 - `macpaw/symfony-health-check-bundle` (only for the `health_check` option)
