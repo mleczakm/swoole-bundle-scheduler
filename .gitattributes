@@ -10,6 +10,7 @@
 /tests             export-ignore
 /docs              export-ignore
 /examples          export-ignore
+/dev               export-ignore
 
 # Normalise line endings for PHP sources.
 *.php text eol=lf

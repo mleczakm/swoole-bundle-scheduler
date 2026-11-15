@@ -1,0 +1,11 @@
+--- a/src/Swoole/WithScheduler.php
++++ b/src/Swoole/WithScheduler.php
+@@ -170,6 +170,8 @@
+             $this->logger->error('Scheduler tick failed', [
+                 'exception' => $e,
+             ]);
++
++            throw $e;
+         } finally {
+             if ($watchdogId !== null) {
+                 Timer::clear($watchdogId);

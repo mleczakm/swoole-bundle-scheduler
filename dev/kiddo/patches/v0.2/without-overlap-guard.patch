@@ -1,0 +1,13 @@
+--- a/src/Swoole/WithScheduler.php
++++ b/src/Swoole/WithScheduler.php
+@@ -120,10 +120,6 @@
+         // whether the previous tick finished. If Scheduler::run() ever stalls, this keeps
+         // overlapping ticks from piling up unboundedly instead of just skipping until the stuck
+         // one clears.
+-        if ($this->running) {
+-            return;
+-        }
+-
+         $lock = $this->acquireCrossProcessLock();
+ 
+         if ($lock === false) {

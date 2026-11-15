@@ -12,23 +12,23 @@ use SymfonyHealthCheckBundle\Dto\Response;
 use function sprintf;
 
 /**
- * Fails when the scheduler has not completed a tick within `maxSilenceSeconds`.
+ * Fails when the scheduler is more than `maxSilenceSeconds` behind.
  *
- * The `Timer::tick` coroutine in {@see \SwooleBundle\Scheduler\Swoole\WithScheduler} fires every
- * `interval`; it can wedge inside `Scheduler::run()` so that no scheduled message runs again
- * while every other `/health` check keeps passing and nothing restarts the container. Counting
- * the seconds since the last heartbeat catches that directly and, via the 503 the bundle
- * returns for a failed check, hands an orchestrator / autoheal something to act on in tens of
- * seconds instead of waiting for a memory threshold hours later.
+ * A pass can wedge inside `Scheduler::run()` so that no scheduled message runs again while every
+ * other `/health` check keeps passing and nothing restarts the container. The loop records when
+ * its next pass is expected; this check fails once that moment is `maxSilenceSeconds` in the
+ * past, and via the 503 the health-check bundle returns hands an orchestrator / autoheal
+ * something to act on in tens of seconds instead of a memory threshold hours later.
  *
  * Only registered when `macpaw/symfony-health-check-bundle` is installed.
  */
 final readonly class SchedulerHeartbeatHealthCheck implements CheckInterface
 {
     /**
-     * @param int $maxSilenceSeconds seconds without a completed tick above which the check
-     *                               fails; with a 1s interval this is tens of missed ticks,
-     *                               not a tight bound
+     * @param int $maxSilenceSeconds how far behind its expected next pass the scheduler may be
+     *                               before the check fails. Independent of the loop interval and
+     *                               of how sparse the schedule is; it only has to exceed the
+     *                               longest pass you consider normal.
      */
     public function __construct(
         private SchedulerHeartbeat $heartbeat,
@@ -38,29 +38,27 @@ final readonly class SchedulerHeartbeatHealthCheck implements CheckInterface
     #[Override]
     public function check(): Response
     {
-        $secondsSinceLastTick = $this->heartbeat->secondsSinceLastBeat();
-
-        if ($secondsSinceLastTick === null) {
-            // No tick recorded yet (fresh boot) - a genuinely stuck boot is already covered
-            // by the other checks, so this stays green rather than flapping during startup.
-            return new Response('scheduler_heartbeat', true, 'No scheduler tick recorded yet', [
-                'seconds_since_last_tick' => null,
-                'threshold_seconds' => $this->maxSilenceSeconds,
-            ]);
-        }
+        $secondsOverdue = $this->heartbeat->secondsOverdue();
 
         $params = [
-            'seconds_since_last_tick' => $secondsSinceLastTick,
+            'seconds_since_last_tick' => $this->heartbeat->secondsSinceLastBeat(),
+            'seconds_overdue' => $secondsOverdue,
             'threshold_seconds' => $this->maxSilenceSeconds,
         ];
 
-        if ($secondsSinceLastTick > $this->maxSilenceSeconds) {
+        if ($secondsOverdue === null) {
+            // The loop has not started in this server yet - a genuinely stuck boot is already
+            // covered by the other checks, so this stays green rather than flapping during startup.
+            return new Response('scheduler_heartbeat', true, 'Scheduler not started yet', $params);
+        }
+
+        if ($secondsOverdue > $this->maxSilenceSeconds) {
             return new Response(
                 'scheduler_heartbeat',
                 false,
                 sprintf(
-                    'Scheduler last completed a tick %ds ago, exceeds threshold %ds',
-                    $secondsSinceLastTick,
+                    'Scheduler is %ds behind its expected pass, exceeds threshold %ds',
+                    $secondsOverdue,
                     $this->maxSilenceSeconds,
                 ),
                 $params,

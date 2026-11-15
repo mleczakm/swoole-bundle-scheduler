@@ -7,10 +7,8 @@ namespace SwooleBundle\Scheduler\Tests\Unit\HealthCheck;
 use Override;
 use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\TestCase;
-use Psr\Log\NullLogger;
 use SwooleBundle\Scheduler\HealthCheck\SchedulerHeartbeatHealthCheck;
 use SwooleBundle\Scheduler\Heartbeat\SchedulerHeartbeat;
-use Symfony\Component\Cache\Adapter\ArrayAdapter;
 use Symfony\Component\Clock\MockClock;
 
 #[Group('unit')]
@@ -24,11 +22,7 @@ final class SchedulerHeartbeatHealthCheckTest extends TestCase
     protected function setUp(): void
     {
         $this->clock = new MockClock('2026-09-01 12:00:00');
-        $this->heartbeat = new SchedulerHeartbeat(
-            new ArrayAdapter(),
-            $this->clock,
-            new NullLogger(),
-        );
+        $this->heartbeat = new SchedulerHeartbeat($this->clock);
     }
 
     public function testPassesButFlagsWhenNoTickRecordedYet(): void
@@ -42,6 +36,7 @@ final class SchedulerHeartbeatHealthCheckTest extends TestCase
 
     public function testPassesWhileTicksAreRecent(): void
     {
+        $this->heartbeat->expect($this->clock->now());
         $this->heartbeat->beat();
         $this->clock->sleep(30);
 
@@ -54,6 +49,7 @@ final class SchedulerHeartbeatHealthCheckTest extends TestCase
 
     public function testFailsWhenTheLastTickIsOlderThanTheThreshold(): void
     {
+        $this->heartbeat->expect($this->clock->now());
         $this->heartbeat->beat();
         $this->clock->sleep(120);
 

@@ -10,9 +10,8 @@ use SwooleBundle\Scheduler\HealthCheck\SchedulerHeartbeatHealthCheck;
 use SwooleBundle\Scheduler\Heartbeat\SchedulerHeartbeat;
 use SwooleBundle\Scheduler\Scheduler\DefaultScheduler;
 use SwooleBundle\Scheduler\Scheduler\Scheduler;
-use SwooleBundle\Scheduler\Swoole\WithScheduler;
+use SwooleBundle\Scheduler\Swoole\SchedulerLoop;
 use SwooleBundle\SwooleBundle\Bridge\Symfony\Container\CoWrapper;
-use Symfony\Component\Clock\ClockInterface;
 use Symfony\Component\DependencyInjection\Argument\TaggedIteratorArgument;
 use Symfony\Component\DependencyInjection\ContainerBuilder;
 use Symfony\Component\DependencyInjection\ContainerInterface;
@@ -27,10 +26,7 @@ use SymfonyHealthCheckBundle\Check\CheckInterface;
  *   enabled: bool,
  *   interval: int,
  *   pre_run: string|null,
- *   after_tick: string|null,
- *   lock: array{enabled: bool, factory: string, resource: string},
  *   watchdog: array{enabled: bool, timeout: int},
- *   heartbeat: array{enabled: bool, cache: string, key: string, ttl: int},
  *   health_check: array{enabled: bool, max_silence: int},
  * }
  */
@@ -62,14 +58,9 @@ final class SwooleBundleSchedulerExtension extends Extension
             );
         }
 
-        $heartbeatEnabled = $config['heartbeat']['enabled'] || $config['health_check']['enabled'];
-
         $this->registerScheduler($config, $container);
-        $this->registerConfigurator($config, $container, $heartbeatEnabled);
-
-        if ($heartbeatEnabled) {
-            $this->registerHeartbeat($config, $container);
-        }
+        $this->registerHeartbeat($container);
+        $this->registerLoop($config, $container);
 
         if ($config['health_check']['enabled']) {
             $this->registerHealthCheck($config, $container);
@@ -84,7 +75,8 @@ final class SwooleBundleSchedulerExtension extends Extension
         $definition = $container->register(DefaultScheduler::class, DefaultScheduler::class)
             ->setPublic(false)
             ->setArgument('$bus', new Reference(MessageBusInterface::class))
-            ->setArgument('$scheduleProviders', new TaggedIteratorArgument('scheduler.schedule_provider'))
+            // Indexed by the tag's "name" attribute - the schedule name given to #[AsSchedule].
+            ->setArgument('$scheduleProviders', new TaggedIteratorArgument('scheduler.schedule_provider', 'name'))
             ->setArgument('$dispatcher', new Reference(
                 EventDispatcherInterface::class,
                 ContainerInterface::NULL_ON_INVALID_REFERENCE,
@@ -97,50 +89,34 @@ final class SwooleBundleSchedulerExtension extends Extension
         $container->setAlias(Scheduler::class, DefaultScheduler::class)->setPublic(false);
     }
 
-    /**
-     * @param SchedulerConfig $config
-     */
-    private function registerConfigurator(array $config, ContainerBuilder $container, bool $heartbeatEnabled): void
+    private function registerHeartbeat(ContainerBuilder $container): void
     {
-        $definition = $container->register(WithScheduler::class, WithScheduler::class)
-            ->setPublic(false)
-            ->setArgument('$scheduler', new Reference(Scheduler::class))
-            ->setArgument('$coWrapper', new Reference(CoWrapper::class))
-            ->setArgument('$logger', new Reference('logger', ContainerInterface::NULL_ON_INVALID_REFERENCE))
-            ->setArgument('$intervalMs', $config['interval'] * 1000)
-            ->addTag('swoole_bundle.server_configurator');
-
-        if ($config['after_tick'] !== null) {
-            $definition->setArgument('$afterTick', new Reference($config['after_tick']));
-        }
-
-        if ($config['lock']['enabled']) {
-            $definition
-                ->setArgument('$lockFactory', new Reference($config['lock']['factory']))
-                ->setArgument('$lockResource', $config['lock']['resource']);
-        }
-
-        if ($heartbeatEnabled) {
-            $definition->setArgument('$heartbeat', new Reference(SchedulerHeartbeat::class));
-        }
-
-        if ($config['watchdog']['enabled']) {
-            $definition->setArgument('$watchdogTimeoutSeconds', $config['watchdog']['timeout']);
-        }
+        $container->register(SchedulerHeartbeat::class, SchedulerHeartbeat::class)
+            ->setPublic(false);
     }
 
     /**
      * @param SchedulerConfig $config
      */
-    private function registerHeartbeat(array $config, ContainerBuilder $container): void
+    private function registerLoop(array $config, ContainerBuilder $container): void
     {
-        $container->register(SchedulerHeartbeat::class, SchedulerHeartbeat::class)
+        $definition = $container->register(SchedulerLoop::class, SchedulerLoop::class)
             ->setPublic(false)
-            ->setArgument('$cache', new Reference($config['heartbeat']['cache']))
-            ->setArgument('$clock', new Reference(ClockInterface::class, ContainerInterface::NULL_ON_INVALID_REFERENCE))
+            ->setArgument('$scheduler', new Reference(Scheduler::class))
+            ->setArgument('$coWrapper', new Reference(CoWrapper::class))
+            ->setArgument('$heartbeat', new Reference(SchedulerHeartbeat::class))
             ->setArgument('$logger', new Reference('logger', ContainerInterface::NULL_ON_INVALID_REFERENCE))
-            ->setArgument('$cacheKey', $config['heartbeat']['key'])
-            ->setArgument('$ttlSeconds', $config['heartbeat']['ttl']);
+
+            ->setArgument('$intervalMs', $config['interval'] * 1000)
+            // The loop is armed from swoole-bundle's worker lifecycle events ...
+            ->addTag('kernel.event_subscriber')
+            // ... and is a (no-op) configurator so that it, and the heartbeat's shared memory,
+            // are instantiated before the server forks its workers.
+            ->addTag('swoole_bundle.server_configurator');
+
+        if ($config['watchdog']['enabled']) {
+            $definition->setArgument('$watchdogTimeoutSeconds', $config['watchdog']['timeout']);
+        }
     }
 
     /**

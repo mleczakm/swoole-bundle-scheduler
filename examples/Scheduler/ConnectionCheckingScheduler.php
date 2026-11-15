@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Scheduler;
 
+use DateTimeImmutable;
 use Doctrine\DBAL\Connection;
 use Psr\Log\LoggerInterface;
 use SwooleBundle\Scheduler\Scheduler\DefaultScheduler;
@@ -32,7 +33,7 @@ final readonly class ConnectionCheckingScheduler implements Scheduler
         private LoggerInterface $logger,
     ) {}
 
-    public function run(): void
+    public function run(): ?DateTimeImmutable
     {
         try {
             $this->connection->executeQuery($this->connection->getDatabasePlatform()->getDummySelectSQL());
@@ -43,6 +44,6 @@ final readonly class ConnectionCheckingScheduler implements Scheduler
             $this->logger->warning('Scheduler DB liveness check failed; reconnecting', ['exception' => $e]);
         }
 
-        $this->inner->run();
+        return $this->inner->run();
     }
 }

@@ -1,0 +1,19 @@
+{"message":"[lab] tick pid=13 cid=2","context":{},"level":250,"level_name":"NOTICE","channel":"app","datetime":"2026-11-15T23:16:33.808682+01:00","extra":{}}
+{"message":"[lab] tick pid=13 cid=5","context":{},"level":250,"level_name":"NOTICE","channel":"app","datetime":"2026-11-15T23:16:34.883478+01:00","extra":{}}
+{"message":"[lab] stress tick handled pid=11","context":{},"level":250,"level_name":"NOTICE","channel":"app","datetime":"2026-11-15T23:16:34.917911+01:00","extra":{}}
+{"message":"[lab] tick pid=124 cid=2","context":{},"level":250,"level_name":"NOTICE","channel":"app","datetime":"2026-11-15T23:16:34.925707+01:00","extra":{}}
+{"message":"[lab] tick pid=124 cid=4","context":{},"level":250,"level_name":"NOTICE","channel":"app","datetime":"2026-11-15T23:16:35.882757+01:00","extra":{}}
+{"message":"[lab] stress tick handled pid=123","context":{},"level":250,"level_name":"NOTICE","channel":"app","datetime":"2026-11-15T23:16:35.947784+01:00","extra":{}}
+{"message":"[lab] tick pid=124 cid=5","context":{},"level":250,"level_name":"NOTICE","channel":"app","datetime":"2026-11-15T23:16:36.882236+01:00","extra":{}}
+{"message":"[lab] stress tick handled pid=125","context":{},"level":250,"level_name":"NOTICE","channel":"app","datetime":"2026-11-15T23:16:36.976866+01:00","extra":{}}
+{"message":"[lab] tick pid=124 cid=6","context":{},"level":250,"level_name":"NOTICE","channel":"app","datetime":"2026-11-15T23:16:37.884378+01:00","extra":{}}
+{"message":"[lab] stress tick handled pid=123","context":{},"level":250,"level_name":"NOTICE","channel":"app","datetime":"2026-11-15T23:16:37.927748+01:00","extra":{}}
+{"message":"[lab] tick pid=124 cid=7","context":{},"level":250,"level_name":"NOTICE","channel":"app","datetime":"2026-11-15T23:16:38.883619+01:00","extra":{}}
+{"message":"Scheduler tick exceeded its timeout; waiting for the active pass to finish","context":{"timeout_seconds":2},"level":400,"level_name":"ERROR","channel":"app","datetime":"2026-11-15T23:16:40.884343+01:00","extra":{}}
+{"message":"[lab] stress tick handled pid=125","context":{},"level":250,"level_name":"NOTICE","channel":"app","datetime":"2026-11-15T23:16:45.212745+01:00","extra":{}}
+{"message":"[lab] tick pid=124 cid=11","context":{},"level":250,"level_name":"NOTICE","channel":"app","datetime":"2026-11-15T23:16:45.883916+01:00","extra":{}}
+{"message":"[lab] stress tick handled pid=123","context":{},"level":250,"level_name":"NOTICE","channel":"app","datetime":"2026-11-15T23:16:45.929926+01:00","extra":{}}
+{"message":"[lab] tick pid=124 cid=12","context":{},"level":250,"level_name":"NOTICE","channel":"app","datetime":"2026-11-15T23:16:46.882917+01:00","extra":{}}
+{"message":"[lab] stress tick handled pid=125","context":{},"level":250,"level_name":"NOTICE","channel":"app","datetime":"2026-11-15T23:16:46.916214+01:00","extra":{}}
+{"message":"[lab] tick pid=124 cid=13","context":{},"level":250,"level_name":"NOTICE","channel":"app","datetime":"2026-11-15T23:16:47.884563+01:00","extra":{}}
+{"message":"[lab] stress tick handled pid=125","context":{},"level":250,"level_name":"NOTICE","channel":"app","datetime":"2026-11-15T23:16:48.812325+01:00","extra":{}}

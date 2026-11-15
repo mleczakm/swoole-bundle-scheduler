@@ -1,3 +1,13 @@
+# 0.3.0 — 2026-11-15
+
+- Start scheduling after fork in HTTP worker #0 with adaptive one-shot timers.
+- Keep reload-overlapping passes exclusive using shared atomic ownership.
+- Replace cache heartbeats with shared memory and expected-pass health.
+- Preserve pooled resets, dispatch events and exception retry; return synchronous handler results.
+- Watchdog reports stalls without overlapping generator execution.
+- Remove lock/heartbeat/after_tick configuration; use named schedule checkpoints.
+- Add reproducible Kiddo comparison lab. See docs/usage.md for breaking changes.
+
 # Changelog
 
 All notable changes to this project are documented here. The format is based on

@@ -4,82 +4,100 @@ declare(strict_types=1);
 
 namespace SwooleBundle\Scheduler\Heartbeat;
 
-use Psr\Cache\CacheItemPoolInterface;
-use Psr\Log\LoggerInterface;
-use Psr\Log\NullLogger;
+use DateTimeImmutable;
+use Swoole\Atomic\Long;
 use Symfony\Component\Clock\Clock;
 use Symfony\Component\Clock\ClockInterface;
-use Throwable;
 
 /**
- * One shared timestamp: "when did the scheduler tick last complete a full pass".
+ * Two timestamps in shared memory: when the scheduler last completed a pass, and when it is
+ * expected to run the next one.
  *
- * Written by {@see \SwooleBundle\Scheduler\Swoole\WithScheduler} after every successful
- * `Scheduler::run()`, read by {@see \SwooleBundle\Scheduler\HealthCheck\SchedulerHeartbeatHealthCheck}
- * from an HTTP worker. Back it with a cross-process, deploy-surviving cache pool (a Redis or
- * DBAL-backed pool), not an in-memory one - the writer and the reader are different processes.
+ * Written by {@see \SwooleBundle\Scheduler\Swoole\SchedulerLoop} in the worker that runs the
+ * scheduler, read by {@see \SwooleBundle\Scheduler\HealthCheck\SchedulerHeartbeatHealthCheck}
+ * from whichever HTTP worker serves the probe. {@see Long} is anonymous shared memory, so a
+ * beat is a single atomic store - no cache pool, no database round trip - and it is visible to
+ * every process forked after this object was built. That is why the bundle instantiates it
+ * before the server starts; an instance created inside a worker is private to that worker.
  *
- * A `Timer::tick` coroutine can wedge inside `Scheduler::run()` while every `/health` probe
- * still passes and nothing restarts the container. A stale heartbeat is the direct signal for
- * that.
+ * Nothing survives a server restart, on purpose: a fresh server reports "not started yet"
+ * instead of the age of the previous process's last beat.
  */
 final readonly class SchedulerHeartbeat
 {
-    private LoggerInterface $logger;
+    private Long $completedAt;
+
+    private Long $expectedAt;
+
+    private Long $owner;
 
     public function __construct(
-        private CacheItemPoolInterface $cache,
         private ClockInterface $clock = new Clock(),
-        ?LoggerInterface $logger = null,
-        private string $cacheKey = 'scheduler_last_tick_at',
-        // TTL long enough that a wedged scheduler keeps producing an ever-growing "seconds
-        // since" for a full day rather than the key silently expiring back to "unknown".
-        private int $ttlSeconds = 86_400,
     ) {
-        $this->logger = $logger ?? new NullLogger();
+        $this->completedAt = new Long(0);
+        $this->expectedAt = new Long(0);
+        $this->owner = new Long(0);
     }
 
     /**
-     * Best-effort: a flaky cache write must not turn a healthy tick into a "tick failed"
-     * error, so this swallows and logs rather than throwing.
+     * Serialize old and new worker #0 during asynchronous reload. A dead owner can be
+     * reclaimed; a slow but live owner must finish before another pass enters.
+     */
+    public function acquire(): bool
+    {
+        $pid = (int) getmypid();
+        $owner = $this->owner->get();
+        if ($owner !== 0 && ! \Swoole\Process::kill($owner, 0)) {
+            $this->owner->cmpset($owner, 0);
+        }
+
+        return $this->owner->cmpset(0, $pid);
+    }
+
+    public function release(): void
+    {
+        $this->owner->cmpset((int) getmypid(), 0);
+    }
+
+    /**
+     * The loop armed its timer: a pass should start at $at.
+     */
+    public function expect(DateTimeImmutable $at): void
+    {
+        $this->expectedAt->set($at->getTimestamp());
+    }
+
+    /**
+     * A pass completed.
      */
     public function beat(): void
     {
-        try {
-            $item = $this->cache->getItem($this->cacheKey);
-            $item->set($this->clock->now()->getTimestamp());
-            $item->expiresAfter($this->ttlSeconds);
-            $this->cache->save($item);
-        } catch (Throwable $e) {
-            $this->logger->warning('Failed to write scheduler heartbeat', ['exception' => $e]);
-        }
+        $this->completedAt->set($this->clock->now()->getTimestamp());
     }
 
     /**
-     * Seconds since the last recorded tick, or null when it is not knowable - none recorded
-     * yet (fresh boot), the key expired (scheduler dead longer than the TTL), or the cache
-     * read itself failed.
+     * Seconds since the last completed pass, or null when none completed yet.
      */
     public function secondsSinceLastBeat(): ?int
     {
-        try {
-            $item = $this->cache->getItem($this->cacheKey);
-        } catch (Throwable $e) {
-            $this->logger->warning('Failed to read scheduler heartbeat', ['exception' => $e]);
+        $completedAt = $this->completedAt->get();
 
-            return null;
-        }
+        return $completedAt === 0 ? null : max(0, $this->clock->now()->getTimestamp() - $completedAt);
+    }
 
-        if (! $item->isHit()) {
-            return null;
-        }
+    /**
+     * How long the scheduler has been running behind: seconds since a pass was last expected to
+     * start without a newer expectation replacing it. 0 while it is on time - a pass re-arms the
+     * timer (and so moves the expectation forward) as soon as it finishes. Null when the loop
+     * never started.
+     *
+     * Measuring against the expected time rather than the last beat keeps this independent of
+     * how sparse the schedule is: a loop sleeping an hour until the next message is not late.
+     */
+    public function secondsOverdue(): ?int
+    {
+        $expectedAt = $this->expectedAt->get();
 
-        $lastTickAt = $item->get();
-
-        if (! is_int($lastTickAt)) {
-            return null;
-        }
-
-        return max(0, $this->clock->now()->getTimestamp() - $lastTickAt);
+        return $expectedAt === 0 ? null : max(0, $this->clock->now()->getTimestamp() - $expectedAt);
     }
 }

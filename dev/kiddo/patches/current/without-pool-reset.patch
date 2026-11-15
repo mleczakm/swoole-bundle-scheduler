@@ -1,0 +1,11 @@
+--- a/src/Swoole/SchedulerLoop.php
++++ b/src/Swoole/SchedulerLoop.php
+@@ -147,7 +147,7 @@
+             // when it ends - the same mechanism request and message boundaries use. Without it
+             // nothing pooled that Scheduler::run() touches (an entity manager, an event
+             // dispatcher) would ever be reset between passes.
+-            $this->coWrapper->defer();
++
+ 
+             $delayMs = $this->delayUntil($this->scheduler->run());
+ 

@@ -1,144 +1,71 @@
-# Usage
+# Usage and migration to 0.3
 
-## Why this exists
+Register the bundle in config/bundles.php and define schedules using Symfony's
+AsSchedule attribute and ScheduleProviderInterface.
 
-[Symfony Scheduler](https://symfony.com/doc/current/scheduler.html) is normally polled by
-running `messenger:consume scheduler_<name>` as a separate, permanently-running worker
-process that blocks between polls on a `sleep()`-based wait. That doesn't cooperate with
-Swoole's event loop: it needs its own process, its own supervision, restarts, and memory,
-outside the Swoole server entirely.
-
-This bundle polls the same schedules from *inside* the Swoole HTTP server, on a
-`Swoole\Timer::tick()` callback - no second process to run or supervise. It is disabled by
-default and opt-in per app.
-
-## Requirements
-
-- `swoole-bundle/swoole-bundle` with **coroutines enabled** (the tick coroutine reuses the
-  bundle's pooled-stateful-service reset machinery).
-- `symfony/scheduler` and `symfony/messenger`, with at least one schedule provider.
-
-## Install
-
-```sh
-composer require mleczakm/swoole-bundle-scheduler
-```
-
-Register the bundle (Symfony Flex does this automatically):
-
-```php
-// config/bundles.php
-return [
-    // ...
-    SwooleBundle\Scheduler\SwooleBundleSchedulerBundle::class => ['all' => true],
-];
-```
-
-## Quickstart
-
-1. Define a schedule provider - a normal Symfony Scheduler class, nothing bundle-specific:
-
-    ```php
-    // src/Scheduler/MainSchedule.php
-    #[AsSchedule('main')]
-    final readonly class MainSchedule implements ScheduleProviderInterface
-    {
-        public function __construct(private CacheInterface $cache) {}
-
-        public function getSchedule(): Schedule
-        {
-            return (new Schedule())
-                ->stateful($this->cache)
-                ->add(RecurringMessage::every('5 minutes', new SampleTask()));
-        }
-    }
-    ```
-
-2. Enable the polling loop:
-
-    ```yaml
-    # config/packages/swoole_bundle_scheduler.yaml
-    swoole_bundle_scheduler:
-        enabled: true
-        interval: 60   # seconds between polls, default 60, minimum 1
-    ```
-
-That's it. Every `#[AsSchedule]`-tagged provider is polled automatically, the same way
-`messenger:consume scheduler_*` would, off the Swoole event loop instead of a separate
-process. Restart the server (`bin/console swoole:server:run`) to pick up the change.
-
-## Full configuration reference
+## Configuration
 
 ```yaml
 swoole_bundle_scheduler:
-    enabled: false          # register the Timer::tick loop as a server configurator
-    interval: 60            # seconds between polls (min 1)
-    pre_run: ~              # service id, invoked (callable) before each poll + before each dispatch
-    after_tick: ~           # service id, invoked (callable) after every tick, success or not
-    lock:
-        enabled: false
-        factory: lock.factory
-        resource: swoole-scheduler-tick
+    enabled: true
+    interval: 60
+    pre_run: null
     watchdog:
         enabled: false
-        timeout: 15          # seconds; deadline for one Scheduler::run() pass
-    heartbeat:
-        enabled: false
-        cache: cache.app     # PSR-6 pool, cross-process, deploy-surviving
-        key: scheduler_last_tick_at
-        ttl: 86400
+        timeout: 15
     health_check:
-        enabled: false       # needs macpaw/symfony-health-check-bundle; implies heartbeat
+        enabled: false
         max_silence: 90
 ```
 
-`swoole_bundle_scheduler: true` is shorthand for `{ enabled: true }`.
+The interval (1–86400 seconds) is the maximum idle sleep and retry backoff.
+A known earlier due date wakes the loop earlier. Runtime changes to the schedule instance
+in the scheduler worker and wall-clock jumps are noticed within this interval.
+Changes made in other HTTP workers do not mutate this worker's in-memory schedule.
 
-See [production-hardening.md](production-hardening.md) for what `lock` / `watchdog` /
-`heartbeat` / `health_check` defend against and when to turn them on.
+pre_run is an optional invokable service, called before due checkpoint work and each
+message dispatch. Keep it cheap and idempotent. Readiness checks and blocking handlers
+can still delay HTTP requests: use coroutine-compatible I/O and async message routing.
 
-## How it behaves
+The optional watchdog logs an overlong pass. It does **not** abandon, cancel or
+concurrently rerun it. The health check reports lateness relative to the expected pass.
+A supervisor must restart a permanently unhealthy server; this bundle does not do that.
 
-- Messages are dispatched through the message bus with the same `PreRunEvent` /
-  `PostRunEvent` / `FailureEvent` events Symfony's own scheduler worker dispatches, so
-  listeners written against those events (a `PreRunEvent` listener that cancels a run, a
-  `FailureEvent` listener that swallows a failure) behave identically here.
-- A tick that throws is caught, logged (`Scheduler tick failed`), and does **not** crash the
-  server - the next tick retries one interval later. Overlapping ticks (a poll still running
-  when the next interval elapses) are skipped, not piled up.
-- Each tick registers its coroutine for pooled-stateful-service reset via the swoole-bundle's
-  `CoWrapper::defer()` - the same mechanism request and message boundaries use - so an entity
-  manager, event dispatcher, etc. touched by `Scheduler::run()` is reset between ticks.
+Health checks require macpaw/symfony-health-check-bundle and explicit registration of
+SwooleBundle\Scheduler\HealthCheck\SchedulerHeartbeatHealthCheck in its checks list.
+Configure its failure HTTP status (e.g. 503) separately.
 
-## Caveats
+## Breaking changes
 
-- **`Symfony\Component\Cache\LockRegistry` file locking is disabled app-wide** while this is
-  enabled (`LockRegistry::setFiles([])`). Symfony Scheduler's stateful
-  `Schedule::stateful()` / `Checkpoint::save()` routes every tick through it, and its
-  `flock()`-based locks have been observed to wedge forever under a `Timer::tick` coroutine.
-  This trades Symfony Cache's cross-process cache-stampede protection - for **every** pool in
-  the app, since `LockRegistry` state is static - for the scheduler not hanging. Acceptable
-  because a `Timer::tick` is the only writer of its own checkpoint, so there was no real
-  stampede to protect against; and the protection only guards redundant recomputation on a
-  cache-miss race, not correctness.
-- During `Server::reload()` the tick callback can fire once in Swoole's **manager process**
-  with no coroutine underneath it (`Coroutine::getCid() === -1`). The bundle detects this,
-  logs a warning, and skips pooled-service reset for that one tick rather than calling
-  `CoWrapper::defer()` (which would throw in a way that bypasses the tick's own `catch` and
-  kill the manager process).
+- Remove lock, heartbeat and after_tick configuration. Shared-memory heartbeat and
+  per-server ownership replace the cache heartbeat and external tick lock.
+- Scheduler::run() now returns ?DateTimeImmutable: the next due time, or null when unknown.
+  Custom implementations should return a due date or use a suitably short interval.
+- WithScheduler is replaced by SchedulerLoop. Service overrides must be updated.
+- interval is a maximum sleep, not fixed polling cadence.
+- Watchdog timeouts report a stall; they no longer start overlapping passes.
+- Schedule checkpoint names now use the AsSchedule name, matching Symfony transports.
+  Old schedule_0 checkpoints are not migrated. Plan the cutover: stateful missed-run
+  handling may differ on the first start. Do not run both consumer implementations together.
+- Heartbeat timestamps do not survive a full server restart; workers share them only
+  within one server. Each server instance schedules independently.
 
-## Swapping the scheduler implementation
+## Semantics and compatibility
 
-To run something before schedules are polled on every tick, prefer `pre_run` (a callable
-service id). For anything more involved, implement
-`SwooleBundle\Scheduler\Scheduler\Scheduler` yourself and register it under that id:
+PreRunEvent can cancel dispatch. PostRunEvent follows successful bus dispatch and includes
+a synchronous handler result. FailureEvent concerns dispatch/synchronous handling;
+it cannot report a later failure in an asynchronous consumer. Events are not an
+exact substitute for Messenger worker lifecycle events.
 
-```yaml
-# config/services.yaml
-SwooleBundle\Scheduler\Scheduler\Scheduler:
-    class: App\Scheduler\ConnectionCheckingScheduler
-    arguments:
-        $inner: '@SwooleBundle\Scheduler\Scheduler\DefaultScheduler'
-```
+The adaptive delay reads Symfony MessageGenerator's private waitUntil property through
+a bound closure. Symfony currently exposes no usable next-run API; its constructor
+accepts CheckpointInterface but its private checkpoint() return type requires the final
+Checkpoint class. This is an explicit compatibility risk. If the property disappears,
+the default scheduler falls back to one-second polling. Test Symfony upgrades.
+A public upstream next-run API should replace this adapter when available.
 
-See [`examples/Scheduler/ConnectionCheckingScheduler.php`](../examples/Scheduler/ConnectionCheckingScheduler.php).
+Use Schedule::lock() with a shared store for multi-server coordination. Per-server
+ownership handles overlapping old/new worker processes, not distributed scheduling.
+No scheduler can promise exactly-once external side effects across process crashes;
+handlers should be idempotent. Stateful schedules preserve checkpoints across reloads;
+non-stateful interval schedules restart their timing in the replacement worker.

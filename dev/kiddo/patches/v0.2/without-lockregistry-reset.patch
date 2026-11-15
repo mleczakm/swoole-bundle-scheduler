@@ -1,0 +1,11 @@
+--- a/src/Swoole/WithScheduler.php
++++ b/src/Swoole/WithScheduler.php
+@@ -101,8 +101,6 @@
+         // LockRegistry's state is static/global rather than scoped to one pool - acceptable since
+         // it only guards redundant recomputation on a concurrent cache-miss race, not
+         // correctness.
+-        LockRegistry::setFiles([]);
+-
+         $this->tickId = Timer::tick($this->intervalMs, $this->tick(...));
+ 
+         $server->on('shutdown', function (): void {

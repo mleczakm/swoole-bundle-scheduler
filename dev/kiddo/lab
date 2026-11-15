@@ -1,0 +1,423 @@
+#!/usr/bin/env bash
+#
+# Run the kiddo app against THIS checkout of the bundle (or any git ref of it), with individual
+# features switched off, and measure what it costs. See dev/kiddo/README.md.
+#
+# Nothing in the kiddo checkout is modified: the bundle source and its config file are
+# bind-mounted over what is already there. `lab restore` undoes it.
+
+set -euo pipefail
+
+LAB_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+BUNDLE_DIR=$(cd "$LAB_DIR/../.." && pwd)
+KIDDO_DIR=$(cd "${KIDDO_DIR:-$BUNDLE_DIR/../kiddo}" 2>/dev/null && pwd) || {
+    echo "kiddo checkout not found - set KIDDO_DIR=/path/to/kiddo" >&2
+    exit 1
+}
+BUILD_DIR=$LAB_DIR/.build
+PORT=${KIDDO_PORT:-9501}
+
+usage() {
+    cat <<EOF
+Usage: dev/kiddo/lab <command>
+
+  up [options]     Snapshot the bundle, apply the options, clear kiddo's cache, (re)start the server
+  status           What is running: options in effect, and proof the container sees the snapshot
+  health           The scheduler_heartbeat entry of kiddo's /health (add --all for every check)
+  watch [secs]     Poll the heartbeat (default every 2s) - the quickest way to see ticks stop
+  measure [secs]   Idle cost over a window (default 60s): CPU + memory per process, DB chatter
+  reload           Server::reload() (SIGUSR1 to the Swoole master)
+  ps               Process tree inside the container (master / manager / workers)
+  logs [--raw]     Follow the server log, one line per record, health-probe noise removed
+  config           The bundle config file the container runs with
+  compose <args>   Raw docker compose with the lab overlay applied
+  check            Verify every patch still applies to the code it targets (no docker involved)
+  restore          Stop the lab container, drop the snapshot, clear the cache -> plain kiddo again
+
+Options for 'up':
+  --ref=GIT_REF          snapshot that ref's src/ instead of the working tree (e.g. --ref=v0.2.0)
+  --interval=N           interval in seconds               (default 1, what kiddo runs today)
+  --no-pre-run           drop the pre_run connection guard
+  --no-watchdog          watchdog.enabled: false
+  --watchdog-timeout=N   watchdog deadline in seconds      (default 15)
+  --max-silence=N        health-check threshold in seconds (default 90)
+  --bare                 --no-pre-run --no-watchdog (and --no-lock on v0.2)
+  --without=NAME[,NAME]  patch a hard-coded guard out of the snapshot:
+                           current code: pool-reset tick-catch
+                           v0.2:         lockregistry-reset overlap-guard cid-guard pool-reset tick-catch
+  --trace                log "[lab] tick pid=.. cid=.." at the start of every pass
+  --stress               add a schedule with a message due every second (handled in a task worker)
+  --no-lock              v0.2 only: lock.enabled: false
+
+The health check always stays on: kiddo's /health references it, and it is how you observe
+everything else.
+Environment: KIDDO_DIR (default ../kiddo), KIDDO_PORT (default 9501).
+EOF
+}
+
+die() {
+    echo "lab: $*" >&2
+    exit 1
+}
+
+compose() {
+    local files=(-f "$KIDDO_DIR/compose.yaml")
+    # An explicit -f list turns off compose's auto-loading of the override file.
+    [[ -f $KIDDO_DIR/compose.override.yaml ]] && files+=(-f "$KIDDO_DIR/compose.override.yaml")
+    files+=(-f "$LAB_DIR/compose.yaml")
+
+    SCHEDULER_LAB_BUILD=$BUILD_DIR docker compose --project-directory "$KIDDO_DIR" "${files[@]}" "$@"
+}
+
+require_snapshot() {
+    [[ -d $BUILD_DIR/src ]] || die "no snapshot - run 'dev/kiddo/lab up' first"
+}
+
+# "v0.2" for the pre-0.3 design (timer armed in the master process), "current" otherwise. The
+# two take different config and different patches.
+flavour_of() {
+    [[ -f $1/src/Swoole/WithScheduler.php ]] && echo v0.2 || echo current
+}
+
+# Copies src/ of a git ref (or the working tree when the ref is empty) to $2/src.
+snapshot_source() {
+    local ref=$1 target=$2
+
+    mkdir -p "$target"
+    if [[ -z $ref ]]; then
+        cp -R "$BUNDLE_DIR/src" "$target/src"
+    else
+        git -C "$BUNDLE_DIR" rev-parse --verify --quiet "$ref^{commit}" >/dev/null || die "unknown git ref '$ref'"
+        git -C "$BUNDLE_DIR" archive "$ref" src | tar -x -C "$target"
+    fi
+}
+
+apply_patch() {
+    # -F0: a patch that no longer matches exactly must fail, not land somewhere nearby.
+    patch --quiet --no-backup-if-mismatch -F0 -p1 -d "$1" <"$2"
+}
+
+# cache:warmup can crash once in a clean container (see kiddo's Dockerfile) - retry like it does.
+clear_cache() {
+    local attempt
+    for attempt in 1 2; do
+        if "$@" run --rm -T php bin/console cache:clear --no-interaction 2>&1 \
+            | grep -v -e '"channel":"deprecation"' -e '^ Container ' -e '^$'; then
+            return 0
+        fi
+    done
+
+    die "cache:clear failed - the container does not compile with these options (output above)"
+}
+
+# Kiddo's own config/packages/swoole_bundle_scheduler.yaml, reproduced with the switches applied.
+write_config() {
+    local flavour=$1 lock=$2 watchdog=$3 pre_run=$4 interval=$5 timeout=$6 silence=$7 stress=$8
+    local yes_no=(false true)
+
+    {
+        echo "# Generated by dev/kiddo/lab - shadows kiddo's config/packages/swoole_bundle_scheduler.yaml."
+        echo "swoole_bundle_scheduler:"
+        echo "    enabled: true"
+        echo "    interval: $interval"
+        [[ $pre_run == 1 ]] && echo "    pre_run: 'App\\Infrastructure\\Doctrine\\SchedulerConnectionGuard'"
+        echo "    watchdog:"
+        echo "        enabled: ${yes_no[$watchdog]}"
+        echo "        timeout: $timeout"
+        echo "    health_check:"
+        echo "        enabled: true"
+        echo "        max_silence: $silence"
+
+        if [[ $flavour == v0.2 ]]; then
+            echo "    lock:"
+            echo "        enabled: ${yes_no[$lock]}"
+            echo "        factory: lock.factory"
+            echo "        resource: app-scheduler-tick"
+            echo "    heartbeat:"
+            echo "        enabled: true"
+            echo "        cache: cache.app"
+        fi
+
+        if [[ $stress == 1 ]]; then
+            echo
+            echo "services:"
+            echo "    SwooleBundle\\Scheduler\\Lab\\:"
+            echo "        resource: '%kernel.project_dir%/vendor/mleczakm/swoole-bundle-scheduler/src/Lab/'"
+            echo "        autowire: true"
+            echo "        autoconfigure: true"
+        fi
+    } >"$BUILD_DIR/swoole_bundle_scheduler.yaml"
+}
+
+cmd_up() {
+    local ref="" lock=1 watchdog=1 pre_run=1 interval=1 timeout=15 silence=90 stress=0
+    local without=() patches=() opts=("$@") arg name flavour
+
+    for arg in "$@"; do
+        case $arg in
+            --ref=*) ref=${arg#*=} ;;
+            --no-lock) lock=0 ;;
+            --no-watchdog) watchdog=0 ;;
+            --no-pre-run) pre_run=0 ;;
+            --bare) lock=0 watchdog=0 pre_run=0 ;;
+            --interval=*) interval=${arg#*=} ;;
+            --watchdog-timeout=*) timeout=${arg#*=} ;;
+            --max-silence=*) silence=${arg#*=} ;;
+            --without=*) IFS=, read -ra names <<<"${arg#*=}" && without+=("${names[@]}") ;;
+            --trace) patches+=(trace) ;;
+            --stress) stress=1 ;;
+            *) die "unknown option '$arg' (see 'lab help')" ;;
+        esac
+    done
+
+    for name in "$interval" "$timeout" "$silence"; do
+        [[ $name =~ ^[1-9][0-9]*$ ]] || die "'$name' is not a positive integer"
+    done
+
+    compose rm --stop --force php >/dev/null 2>&1 || true
+    rm -rf "$BUILD_DIR"
+    snapshot_source "$ref" "$BUILD_DIR"
+    flavour=$(flavour_of "$BUILD_DIR")
+
+    for name in "${without[@]}"; do
+        patches+=("without-$name")
+    done
+
+    for name in "${patches[@]}"; do
+        [[ -f $LAB_DIR/patches/$flavour/$name.patch ]] \
+            || die "no '${name#without-}' for $flavour code - available: $(cd "$LAB_DIR/patches/$flavour" && ls | sed 's/\.patch$//' | tr '\n' ' ')"
+        apply_patch "$BUILD_DIR" "$LAB_DIR/patches/$flavour/$name.patch" \
+            || die "patches/$flavour/$name.patch no longer applies (or conflicts with another option)"
+    done
+
+    [[ $stress == 1 ]] && cp -R "$LAB_DIR/stress" "$BUILD_DIR/src/Lab"
+
+    write_config "$flavour" "$lock" "$watchdog" "$pre_run" "$interval" "$timeout" "$silence" "$stress"
+
+    {
+        echo "options:   ${opts[*]:-none}"
+        echo "bundle:    ${ref:-working tree} ($(git -C "$BUNDLE_DIR" describe --tags --always ${ref:---dirty} 2>/dev/null || echo unknown), $flavour design)"
+        echo "patches:   ${patches[*]:-none}"
+        echo "started:   $(date '+%F %T')"
+    } >"$BUILD_DIR/state"
+
+    echo "==> stopping the php container"
+    compose rm --stop --force php >/dev/null 2>&1 || true
+
+    # APP_ENV=prod (kiddo's .env.local) never re-checks config freshness, so a config or
+    # service-wiring change is invisible until the compiled container is thrown away.
+    echo "==> clearing kiddo's cache"
+    clear_cache compose
+
+    echo "==> starting db + php"
+    compose up -d db php
+
+    echo -n "==> waiting for http://localhost:$PORT "
+    for _ in $(seq 1 60); do
+        if curl -s -o /dev/null "http://localhost:$PORT/health"; then
+            echo "up"
+            echo
+            cmd_status
+            return 0
+        fi
+        echo -n .
+        sleep 1
+    done
+
+    echo " not responding"
+    compose logs --tail 40 php
+    die "server did not come up"
+}
+
+cmd_status() {
+    require_snapshot
+    cat "$BUILD_DIR/state"
+
+    local file local_sum remote_sum
+    file=$(cd "$BUILD_DIR" && ls src/Swoole/*.php | head -1)
+    local_sum=$(md5sum <"$BUILD_DIR/$file" | cut -d' ' -f1)
+    remote_sum=$(compose exec -T php md5sum "vendor/mleczakm/swoole-bundle-scheduler/$file" 2>/dev/null | cut -d' ' -f1) || true
+
+    if [[ -z $remote_sum ]]; then
+        echo "container: not running"
+    elif [[ $local_sum == "$remote_sum" ]]; then
+        echo "container: running the snapshot ($(basename "$file") $local_sum)"
+    else
+        echo "container: NOT running the snapshot (inside $remote_sum, snapshot $local_sum)"
+    fi
+}
+
+health() {
+    curl -s --max-time 5 "http://localhost:$PORT/health"
+}
+
+cmd_health() {
+    if [[ ${1:-} == --all ]]; then
+        health | jq .
+    else
+        health | jq -c '.[] | select(.name == "scheduler_heartbeat")'
+    fi
+}
+
+cmd_watch() {
+    local every=${1:-2}
+
+    while true; do
+        printf '%s  %s\n' "$(date +%T)" "$(health | jq -r '
+            .[] | select(.name == "scheduler_heartbeat")
+            | "\(if .result then "ok  " else "FAIL" end)  last tick \(.params.seconds_since_last_tick // "?")s ago"
+              + (if .params | has("seconds_overdue") then ", \(.params.seconds_overdue // "?")s overdue" else "" end)
+              + "  (\(.message))"
+        ' 2>/dev/null || echo "no response")"
+        sleep "$every"
+    done
+}
+
+# One line per log record, minus the noise 'watch'/'health' generate themselves (every /health
+# probe runs an outbound HTTP check and a task-worker round trip) and deprecation notices.
+cmd_logs() {
+    if [[ ${1:-} == --raw ]]; then
+        shift
+        compose logs -f --since 1m "$@" php
+        return
+    fi
+
+    compose logs -f --no-log-prefix --since 1m "$@" php | jq --unbuffered -R -r '
+        . as $raw
+        | (try fromjson catch $raw) as $line
+        | if ($line | type) != "object" then $raw
+          elif ($raw | test("\"channel\":\"deprecation\"|/health|\"health\"|DoctrineInsideTaskWorkerCheck|connectivitycheck")) then empty
+          else "\($line.datetime[11:23]) \($line.level_name) [\($line.channel)] \($line.message)"
+               + (if $line.context.exception.message then "  <- \($line.context.exception.message)" else "" end)
+          end
+    '
+}
+
+cmd_reload() {
+    # The oldest php process is the Swoole master; SIGUSR1 is Server::reload().
+    compose exec -T php sh -c 'pid=$(pgrep -o -x php) && kill -USR1 "$pid" && echo "SIGUSR1 -> master pid $pid"'
+}
+
+# "pid ppid cpu_ticks rss_mb pss_mb private_mb" for every php process in the container.
+proc_snapshot() {
+    compose exec -T php sh -c '
+        for p in $(pgrep -x php); do
+            [ -r /proc/$p/smaps_rollup ] || continue
+            echo "$p $(awk "{print \$4, \$14+\$15}" /proc/$p/stat) $(awk "
+                /^Rss:/ {r=\$2} /^Pss:/ {s=\$2} /^Private_(Clean|Dirty):/ {v+=\$2}
+                END {printf \"%.0f %.0f %.0f\", r/1024, s/1024, v/1024}" /proc/$p/smaps_rollup)"
+        done'
+}
+
+# "transactions cache_items_writes connections" for kiddo's database.
+db_snapshot() {
+    compose exec -T db psql -U app -d app -At -F ' ' -c "
+        select (select xact_commit + xact_rollback from pg_stat_database where datname = current_database()),
+               (select coalesce(sum(n_tup_ins + n_tup_upd + n_tup_del), 0) from pg_stat_user_tables where relname = 'cache_items'),
+               (select count(*) from pg_stat_activity where datname = current_database() and pid <> pg_backend_pid())"
+}
+
+# What the server costs while nothing talks to it: CPU and memory per process, database chatter.
+# Do not run 'watch' or hit /health during the window - every probe is itself a request.
+cmd_measure() {
+    local secs=${1:-60} procs_before procs_after db_before db_after
+    [[ $secs =~ ^[1-9][0-9]*$ ]] || die "'$secs' is not a positive number of seconds"
+
+    procs_before=$(proc_snapshot)
+    db_before=$(db_snapshot)
+    echo "measuring for ${secs}s (leave the server alone) ..." >&2
+    sleep "$secs"
+    procs_after=$(proc_snapshot)
+    db_after=$(db_snapshot)
+
+    {
+        echo "pid role cpu_% rss_mb pss_mb private_mb"
+        # cpu_% is of one core: clock ticks are 1/100s, so ticks per second is already a percentage.
+        awk -v secs="$secs" '
+            NR == FNR { before[$1] = $3; next }
+            {
+                if ($2 == 0) master = $1
+                rows[++n] = $0
+            }
+            END {
+                for (i = 1; i <= n; i++) {
+                    split(rows[i], f, " ")
+                    role = f[2] == 0 ? "master" : (f[2] == master && !seen_manager++ ? "manager" : "worker")
+                    cpu = (f[1] in before) ? sprintf("%.2f", (f[3] - before[f[1]]) / secs) : "new"
+                    print f[1], role, cpu, f[4], f[5], f[6]
+                    pss += f[5]; private += f[6]
+                }
+                print "all", "-", "-", "-", pss, private
+            }' <(echo "$procs_before") <(echo "$procs_after")
+    } | column -t
+
+    echo
+    awk -v secs="$secs" '
+        NR == 1 { tx = $1; writes = $2; next }
+        {
+            printf "db transactions/s:      %.2f\n", ($1 - tx) / secs
+            printf "cache_items writes/s:   %.2f\n", ($2 - writes) / secs
+            printf "db connections now:     %d\n", $3
+        }' <(echo "$db_before") <(echo "$db_after")
+}
+
+# No docker needed: every patch must still apply, alone, to the code it targets - the working
+# tree for patches/current, the v0.2.0 tag for patches/v0.2.
+cmd_check() {
+    local tmp flavour ref patch_file failed=0
+    tmp=$(mktemp -d)
+
+    for flavour in current v0.2; do
+        ref=""
+        [[ $flavour == v0.2 ]] && ref=v0.2.0
+
+        for patch_file in "$LAB_DIR/patches/$flavour"/*.patch; do
+            rm -rf "$tmp/src"
+            snapshot_source "$ref" "$tmp"
+            if apply_patch "$tmp" "$patch_file" >/dev/null 2>&1; then
+                echo "ok     $flavour/$(basename "$patch_file")"
+            else
+                echo "STALE  $flavour/$(basename "$patch_file")"
+                failed=1
+            fi
+        done
+    done
+
+    rm -rf "$tmp"
+    return $failed
+}
+
+cmd_restore() {
+    if [[ -d $BUILD_DIR ]]; then
+        compose rm --stop --force php || true
+    fi
+    rm -rf "$BUILD_DIR"
+
+    echo "==> clearing kiddo's cache with the vendored bundle back in place"
+    clear_cache docker compose --project-directory "$KIDDO_DIR"
+
+    echo "kiddo is back on its vendored bundle. Start it the usual way: (cd $KIDDO_DIR && docker compose up -d php)"
+}
+
+command=${1:-help}
+shift || true
+
+case $command in
+    up) cmd_up "$@" ;;
+    status) cmd_status ;;
+    health) cmd_health "$@" ;;
+    watch) cmd_watch "$@" ;;
+    measure) cmd_measure "$@" ;;
+    reload) cmd_reload ;;
+    ps) compose exec -T php ps -o pid,ppid,rss,args ;;
+    logs) cmd_logs "$@" ;;
+    config) compose exec -T php cat config/packages/swoole_bundle_scheduler.yaml ;;
+    compose) compose "$@" ;;
+    check) cmd_check ;;
+    restore) cmd_restore ;;
+    help | -h | --help) usage ;;
+    *)
+        usage >&2
+        exit 1
+        ;;
+esac

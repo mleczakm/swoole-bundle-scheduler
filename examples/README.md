@@ -1,14 +1,10 @@
 # Examples
 
-Copy-paste starting points. Namespaced `App\Scheduler\` so they drop into a typical Symfony app.
+Copy the message, handler and schedule into your application's App namespace and
+register the bundle. The configuration example enables the optional health integration;
+install and configure macpaw/symfony-health-check-bundle first, or disable health_check.
 
-| File | What it shows |
-|---|---|
-| [`Schedule/MainSchedule.php`](Schedule/MainSchedule.php) | An `#[AsSchedule]` provider - the only thing most apps need to write |
-| [`Message/SampleTask.php`](Message/SampleTask.php) + [`SampleTaskHandler.php`](Message/SampleTaskHandler.php) | A scheduled message and its handler |
-| [`config/swoole_bundle_scheduler.yaml`](config/swoole_bundle_scheduler.yaml) | Every config knob, annotated |
-| [`Scheduler/ConnectionCheckingScheduler.php`](Scheduler/ConnectionCheckingScheduler.php) | Replacing the `Scheduler` service to run logic before every poll |
+ConnectionCheckingScheduler demonstrates a custom Scheduler implementation. It returns
+the inner scheduler's next due date. Prefer pre_run for a simple connection check.
 
-See [`../docs/usage.md`](../docs/usage.md) for the walkthrough and
-[`../docs/production-hardening.md`](../docs/production-hardening.md) for when to turn on the
-lock / watchdog / heartbeat / health-check.
+See ../docs/usage.md for complete 0.3 configuration and migration details.

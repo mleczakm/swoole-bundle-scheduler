@@ -1,0 +1,18 @@
+--- a/src/Swoole/WithScheduler.php
++++ b/src/Swoole/WithScheduler.php
+@@ -150,15 +150,6 @@
+             // documented safe to call from any context (returns -1 instead of throwing), so
+             // checking first avoids ever making the call that can't be reliably caught -
+             // skipping pooled-service reset for one tick is a far smaller cost than that.
+-            if (Coroutine::getCid() === -1) {
+-                $this->logger->warning(
+-                    'Scheduler tick has no coroutine context (likely mid worker reload/recycle) - '
+-                    . 'skipping pooled-service reset for this tick',
+-                );
+-            } else {
+-                $this->coWrapper->defer();
+-            }
+-
+             $this->scheduler->run();
+             $this->heartbeat?->beat();
+         } catch (Throwable $e) {

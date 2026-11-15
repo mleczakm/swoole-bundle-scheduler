@@ -1,0 +1,11 @@
+# Overlay for kiddo's own compose files - applied by ./lab, never on its own.
+#
+# Replaces two things inside kiddo's php container with what ./lab built in dev/kiddo/.build:
+# the Packagist copy of the bundle (src/ of the chosen ref + any patches), and the bundle's
+# config file. Both mount points already exist in the kiddo checkout, so nothing is created or
+# changed on the kiddo side.
+services:
+  php:
+    volumes:
+      - ${SCHEDULER_LAB_BUILD:?run this through dev/kiddo/lab}/src:/app/vendor/mleczakm/swoole-bundle-scheduler/src:ro
+      - ${SCHEDULER_LAB_BUILD:?run this through dev/kiddo/lab}/swoole_bundle_scheduler.yaml:/app/config/packages/swoole_bundle_scheduler.yaml:ro

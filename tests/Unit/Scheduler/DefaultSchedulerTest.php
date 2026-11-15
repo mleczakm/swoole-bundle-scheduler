@@ -169,6 +169,33 @@ final class DefaultSchedulerTest extends TestCase
         self::assertSame(2, $calls->count);
     }
 
+    public function testFutureMessagesAvoidReadinessQueriesAndKeepScheduleName(): void
+    {
+        $clock = new \Symfony\Component\Clock\MockClock('2026-01-01');
+        $calls = 0;
+        $message = new stdClass();
+        $bus = $this->createMock(MessageBusInterface::class);
+        $bus->expects($this->once())->method('dispatch')->willReturn(new Envelope($message));
+        $events = new EventDispatcher();
+        $name = null;
+        $events->addListener(PreRunEvent::class, static function (PreRunEvent $event) use (&$name): void {
+            $name = $event->getMessageContext()->name;
+        });
+        $schedule = (new Schedule())->add(RecurringMessage::every('30 seconds', $message));
+        $scheduler = new DefaultScheduler($bus, ['main' => $schedule], $clock, $events, static function () use (&$calls): void {
+            ++$calls;
+        });
+        self::assertEquals($clock->now()->modify('+30 seconds'), $scheduler->run());
+        self::assertSame(1, $calls);
+        $clock->sleep(5);
+        $scheduler->run();
+        self::assertSame(1, $calls);
+        $clock->sleep(25);
+        $scheduler->run();
+        self::assertSame('main', $name);
+        self::assertSame(3, $calls);
+    }
+
     private static function dueOnceSchedule(object $message): Schedule
     {
         $state = new stdClass();

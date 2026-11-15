@@ -1,0 +1,16 @@
+--- a/src/Swoole/WithScheduler.php
++++ b/src/Swoole/WithScheduler.php
+@@ -116,6 +116,13 @@
+ 
+     public function tick(): void
+     {
++        $this->logger->notice(sprintf(
++            '[lab] tick pid=%d cid=%d running=%s',
++            getmypid(),
++            Coroutine::getCid(),
++            $this->running ? 'yes' : 'no',
++        ));
++
+         // Defense in depth: Timer::tick fires a new coroutine every interval regardless of
+         // whether the previous tick finished. If Scheduler::run() ever stalls, this keeps
+         // overlapping ticks from piling up unboundedly instead of just skipping until the stuck

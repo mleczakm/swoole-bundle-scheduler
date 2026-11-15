@@ -1,0 +1,10 @@
+--- a/src/Swoole/SchedulerLoop.php
++++ b/src/Swoole/SchedulerLoop.php
+@@ -139,6 +139,7 @@
+         }
+         $this->inFlight = true;
+         $this->startWatchdog();
++        $this->logger->notice(sprintf("[lab] tick pid=%d cid=%d", getmypid(), Coroutine::getCid()));
+         $delayMs = $this->intervalMs;
+         $completed = false;
+ 
